@@ -37,6 +37,24 @@ func TestFleetHandler(t *testing.T) {
 	}
 }
 
+// TestFleetHandlerMtxDown verifies that handleFleet returns 502 when MediaMTX
+// is unreachable (closed server → connection refused).
+func TestFleetHandlerMtxDown(t *testing.T) {
+	// Start then immediately close a server so its URL is valid but unreachable.
+	closed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	closedURL := closed.URL
+	closed.Close()
+
+	api := newAPIServer(closedURL)
+	req := httptest.NewRequest("GET", "/api/fleet", nil)
+	rec := httptest.NewRecorder()
+	api.handleFleet(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502 Bad Gateway", rec.Code)
+	}
+}
+
 func TestBusDetailHandler(t *testing.T) {
 	mtx := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

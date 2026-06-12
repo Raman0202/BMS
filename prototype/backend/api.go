@@ -18,6 +18,9 @@ type apiServer struct {
 	cachedFleet *fleetSummary
 	cachedPaths []mtxPath
 	cachedAt    time.Time
+	refreshing  bool
+	refreshDone chan struct{}
+	lastErr     error
 }
 
 const fleetCacheTTL = 2 * time.Second
@@ -44,6 +47,11 @@ func (a *apiServer) fetchAllPaths() ([]mtxPath, error) {
 		if err != nil {
 			return nil, err
 		}
+		// Issue 2: check HTTP status before decoding.
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			return nil, fmt.Errorf("mediamtx returned HTTP %d for %s", resp.StatusCode, url)
+		}
 		var list mtxPathList
 		err = json.NewDecoder(resp.Body).Decode(&list)
 		resp.Body.Close()
@@ -51,7 +59,8 @@ func (a *apiServer) fetchAllPaths() ([]mtxPath, error) {
 			return nil, err
 		}
 		all = append(all, list.Items...)
-		if page >= list.PageCount-1 {
+		// Issue 3: guard against pageCount == 0 to avoid integer underflow.
+		if list.PageCount == 0 || page >= list.PageCount-1 {
 			break
 		}
 	}
@@ -59,20 +68,63 @@ func (a *apiServer) fetchAllPaths() ([]mtxPath, error) {
 }
 
 // snapshot returns cached paths+summary, refreshing from MediaMTX when stale.
+// Issue 1: stampede-safe — lock is NOT held across HTTP fetches.
 func (a *apiServer) snapshot() (*fleetSummary, []mtxPath, error) {
 	a.cacheMu.Lock()
-	defer a.cacheMu.Unlock()
+
+	// Cache is fresh — return immediately.
 	if a.cachedFleet != nil && time.Since(a.cachedAt) < fleetCacheTTL {
-		return a.cachedFleet, a.cachedPaths, nil
+		fleet, paths := a.cachedFleet, a.cachedPaths
+		a.cacheMu.Unlock()
+		return fleet, paths, nil
 	}
-	paths, err := a.fetchAllPaths()
-	if err != nil {
-		return nil, nil, err
+
+	// Another goroutine is already refreshing — wait for it.
+	if a.refreshing {
+		done := a.refreshDone
+		a.cacheMu.Unlock()
+		<-done
+		a.cacheMu.Lock()
+		fleet, paths, err := a.cachedFleet, a.cachedPaths, a.lastErr
+		a.cacheMu.Unlock()
+		if fleet == nil && err == nil {
+			err = fmt.Errorf("cache unavailable after refresh")
+		}
+		return fleet, paths, err
 	}
-	summary := a.tracker.build(paths, time.Now())
-	a.cachedFleet = &summary
-	a.cachedPaths = paths
-	a.cachedAt = time.Now()
+
+	// We are the designated refresher.
+	a.refreshing = true
+	a.refreshDone = make(chan struct{})
+	done := a.refreshDone
+	a.cacheMu.Unlock()
+
+	// Fetch and build WITHOUT holding the lock.
+	paths, fetchErr := a.fetchAllPaths()
+	var summary fleetSummary
+	if fetchErr == nil {
+		summary = a.tracker.build(paths, time.Now())
+	}
+
+	// Write results back under the lock.
+	a.cacheMu.Lock()
+	if fetchErr == nil {
+		a.cachedFleet = &summary
+		a.cachedPaths = paths
+		a.cachedAt = time.Now()
+		a.lastErr = nil
+	} else {
+		a.lastErr = fetchErr
+	}
+	a.refreshing = false
+	a.cacheMu.Unlock()
+
+	// Wake all waiters.
+	close(done)
+
+	if fetchErr != nil {
+		return nil, nil, fetchErr
+	}
 	return a.cachedFleet, a.cachedPaths, nil
 }
 
@@ -114,11 +166,16 @@ func (a *apiServer) handleBusDetail(w http.ResponseWriter, r *http.Request) {
 		if !ok || busID != id {
 			continue
 		}
+		// Issue 4: normalize nil tracks to []string{} so JSON encodes [] not null.
+		tracks := p.Tracks
+		if tracks == nil {
+			tracks = []string{}
+		}
 		detail.Cams = append(detail.Cams, camDetail{
 			Cam:           cam,
 			Path:          p.Name,
 			Ready:         p.Ready,
-			Tracks:        p.Tracks,
+			Tracks:        tracks,
 			BytesReceived: p.BytesReceived,
 			Readers:       len(p.Readers),
 		})
