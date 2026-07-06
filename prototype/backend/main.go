@@ -45,6 +45,8 @@ func main() {
 	api := newAPIServer(cfg.mediaMTXAPI)
 	mux.HandleFunc("GET /api/fleet", api.handleFleet)
 	mux.HandleFunc("GET /api/bus/{id}", api.handleBusDetail)
+	mux.HandleFunc("GET /api/stream/{id}", api.handleStreamLive)
+	mux.HandleFunc("GET /api/stream/{id}/recording", api.handleStreamRecording)
 	mux.Handle("/playback/", reverseProxy(cfg.mediaMTXPlayback, "/playback", noCache))
 
 	mux.Handle("/", staticSPA(cfg.staticDir))

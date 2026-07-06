@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
+	"sort"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -181,6 +184,125 @@ func (a *apiServer) handleBusDetail(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, detail)
+}
+
+// camsForBus filters paths to those belonging to busId, sorted by cam number.
+func camsForBus(paths []mtxPath, busID string) []mtxPath {
+	var out []mtxPath
+	for _, p := range paths {
+		id, _, ok := parseBusPath(p.Name)
+		if !ok || id != busID {
+			continue
+		}
+		out = append(out, p)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		_, ci, _ := parseBusPath(out[i].Name)
+		_, cj, _ := parseBusPath(out[j].Name)
+		return ci < cj
+	})
+	return out
+}
+
+type streamInfo struct {
+	Cam     int    `json:"cam"`
+	Path    string `json:"path"`
+	Ready   bool   `json:"ready"`
+	WhepURL string `json:"whepUrl"`
+	HLSURL  string `json:"hlsUrl"`
+}
+
+func (a *apiServer) handleStreamLive(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	camFilter := r.URL.Query().Get("cam")
+
+	_, paths, err := a.snapshot()
+	if err != nil {
+		log.Printf("stream live: mediamtx api error: %v", err)
+		http.Error(w, "mediamtx unavailable", http.StatusBadGateway)
+		return
+	}
+
+	result := []streamInfo{}
+	for _, p := range camsForBus(paths, id) {
+		_, cam, _ := parseBusPath(p.Name)
+		if camFilter != "" {
+			wantCam, err := strconv.Atoi(camFilter)
+			if err != nil || cam != wantCam {
+				continue
+			}
+		}
+		result = append(result, streamInfo{
+			Cam:     cam,
+			Path:    p.Name,
+			Ready:   p.Ready,
+			WhepURL: "/whep/" + p.Name + "/whep",
+			HLSURL:  "/live/" + p.Name + "/index.m3u8",
+		})
+	}
+	writeJSON(w, result)
+}
+
+type recordingInfo struct {
+	Cam  int    `json:"cam"`
+	Path string `json:"path"`
+	URL  string `json:"url"`
+}
+
+func (a *apiServer) handleStreamRecording(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	camFilter := r.URL.Query().Get("cam")
+
+	fromStr := r.URL.Query().Get("from")
+	toStr := r.URL.Query().Get("to")
+	if fromStr == "" || toStr == "" {
+		http.Error(w, "from and to query params are required", http.StatusBadRequest)
+		return
+	}
+	from, err := time.Parse(time.RFC3339, fromStr)
+	if err != nil {
+		http.Error(w, "invalid from: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	to, err := time.Parse(time.RFC3339, toStr)
+	if err != nil {
+		http.Error(w, "invalid to: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !to.After(from) {
+		http.Error(w, "to must be after from", http.StatusBadRequest)
+		return
+	}
+	duration := to.Sub(from).Seconds()
+
+	_, paths, err := a.snapshot()
+	if err != nil {
+		log.Printf("stream recording: mediamtx api error: %v", err)
+		http.Error(w, "mediamtx unavailable", http.StatusBadGateway)
+		return
+	}
+
+	result := []recordingInfo{}
+	for _, p := range camsForBus(paths, id) {
+		_, cam, _ := parseBusPath(p.Name)
+		if camFilter != "" {
+			wantCam, err := strconv.Atoi(camFilter)
+			if err != nil || cam != wantCam {
+				continue
+			}
+		}
+		q := url.Values{}
+		q.Set("path", p.Name)
+		q.Set("start", from.Format(time.RFC3339))
+		q.Set("duration", strconv.FormatFloat(duration, 'f', -1, 64))
+		q.Set("format", "mp4")
+		result = append(result, recordingInfo{
+			Cam:  cam,
+			Path: p.Name,
+			URL:  "/playback/get?" + q.Encode(),
+		})
+	}
+	writeJSON(w, result)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

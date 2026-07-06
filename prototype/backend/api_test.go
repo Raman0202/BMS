@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -84,5 +85,144 @@ func TestBusDetailHandler(t *testing.T) {
 	}
 	if got.Cams[0].Path != "bus_1_1" {
 		t.Fatalf("cam[0].Path = %q, want bus_1_1", got.Cams[0].Path)
+	}
+}
+
+func streamTestMtx() *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"pageCount":1,"items":[
+			{"name":"bus_1_1","ready":true,"tracks":["H264"],"bytesReceived":1000},
+			{"name":"bus_1_2","ready":true,"tracks":["H264"],"bytesReceived":2000},
+			{"name":"bus_2_1","ready":true}
+		]}`)
+	}))
+}
+
+func TestStreamLiveHandler_AllCams(t *testing.T) {
+	mtx := streamTestMtx()
+	defer mtx.Close()
+
+	api := newAPIServer(mtx.URL)
+	req := httptest.NewRequest("GET", "/api/stream/1", nil)
+	req.SetPathValue("id", "1")
+	rec := httptest.NewRecorder()
+	api.handleStreamLive(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var got []streamInfo
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("bad json: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(got) = %d, want 2", len(got))
+	}
+	if got[0].Path != "bus_1_1" || got[0].WhepURL != "/whep/bus_1_1/whep" || got[0].HLSURL != "/live/bus_1_1/index.m3u8" {
+		t.Fatalf("got[0] = %+v, unexpected", got[0])
+	}
+}
+
+func TestStreamLiveHandler_SingleCam(t *testing.T) {
+	mtx := streamTestMtx()
+	defer mtx.Close()
+
+	api := newAPIServer(mtx.URL)
+	req := httptest.NewRequest("GET", "/api/stream/1?cam=2", nil)
+	req.SetPathValue("id", "1")
+	rec := httptest.NewRecorder()
+	api.handleStreamLive(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var got []streamInfo
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("bad json: %v", err)
+	}
+	if len(got) != 1 || got[0].Path != "bus_1_2" {
+		t.Fatalf("got = %+v, want single bus_1_2", got)
+	}
+}
+
+func TestStreamLiveHandler_CamNotFound(t *testing.T) {
+	mtx := streamTestMtx()
+	defer mtx.Close()
+
+	api := newAPIServer(mtx.URL)
+	req := httptest.NewRequest("GET", "/api/stream/1?cam=9", nil)
+	req.SetPathValue("id", "1")
+	rec := httptest.NewRecorder()
+	api.handleStreamLive(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if rec.Body.String() != "[]\n" {
+		t.Fatalf("body = %q, want []", rec.Body.String())
+	}
+}
+
+func TestStreamRecordingHandler_Valid(t *testing.T) {
+	mtx := streamTestMtx()
+	defer mtx.Close()
+
+	api := newAPIServer(mtx.URL)
+	req := httptest.NewRequest("GET", "/api/stream/1/recording?from=2026-01-01T00:00:00Z&to=2026-01-01T00:02:00Z", nil)
+	req.SetPathValue("id", "1")
+	rec := httptest.NewRecorder()
+	api.handleStreamRecording(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	var got []recordingInfo
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("bad json: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(got) = %d, want 2", len(got))
+	}
+	for _, r := range got {
+		if !strings.Contains(r.URL, "duration=120") {
+			t.Fatalf("url %q missing duration=120", r.URL)
+		}
+	}
+	if !strings.Contains(got[0].URL, "path=bus_1_1") && !strings.Contains(got[1].URL, "path=bus_1_1") {
+		t.Fatalf("no url contains path=bus_1_1: %+v", got)
+	}
+	if !strings.Contains(got[0].URL, "path=bus_1_2") && !strings.Contains(got[1].URL, "path=bus_1_2") {
+		t.Fatalf("no url contains path=bus_1_2: %+v", got)
+	}
+}
+
+func TestStreamRecordingHandler_InvalidRange(t *testing.T) {
+	mtx := streamTestMtx()
+	defer mtx.Close()
+
+	api := newAPIServer(mtx.URL)
+	req := httptest.NewRequest("GET", "/api/stream/1/recording?from=2026-01-01T00:02:00Z&to=2026-01-01T00:00:00Z", nil)
+	req.SetPathValue("id", "1")
+	rec := httptest.NewRecorder()
+	api.handleStreamRecording(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestStreamRecordingHandler_MissingParams(t *testing.T) {
+	mtx := streamTestMtx()
+	defer mtx.Close()
+
+	api := newAPIServer(mtx.URL)
+	req := httptest.NewRequest("GET", "/api/stream/1/recording?to=2026-01-01T00:00:00Z", nil)
+	req.SetPathValue("id", "1")
+	rec := httptest.NewRecorder()
+	api.handleStreamRecording(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
 	}
 }
