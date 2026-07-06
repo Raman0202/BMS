@@ -37,7 +37,7 @@ type fleetSummary struct {
 	UpdatedAt int64       `json:"updatedAt"`
 }
 
-var busPathRe = regexp.MustCompile(`^(?:.*/)?bus_([0-9]+)_([1-9])$`)
+var busPathRe = regexp.MustCompile(`^(?:.*/)?([A-Za-z0-9]+)_([1-9])$`)
 
 // parseBusPath extracts bus id and camera number from a stream path name.
 func parseBusPath(name string) (busID string, cam int, ok bool) {

@@ -14,7 +14,7 @@ function CamRecordings({ path, label }: { path: string; label: string }) {
       <div className="mb-2 text-sm font-semibold">{label}</div>
       {isError && <div className="text-xs text-down">recordings unavailable</div>}
       {segments && segments.length === 0 && (
-        <div className="text-xs text-ink-dim">no recordings in last 10 min</div>
+        <div className="text-xs text-ink-dim">no recordings in last 1 hour</div>
       )}
       <div className="flex flex-wrap gap-2">
         {segments?.map(seg => {

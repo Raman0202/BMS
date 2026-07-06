@@ -41,7 +41,7 @@ export default function BusDetail({ busId }: { busId: string }) {
               tab === t ? 'bg-accent/20 text-accent' : 'text-ink-dim hover:bg-surface-1'
             }`}
           >
-            {t === 'live' ? '● Live' : '⏪ Last 10 min'}
+            {t === 'live' ? '● Live' : '⏪ Last 1 hour'}
           </button>
         ))}
       </div>
