@@ -1,6 +1,6 @@
 services:
   mediamtx:
-    image: bluenviron/mediamtx:latest
+    image: bluenviron/mediamtx:1.19.2
     ports:
       - "11935:1935" # RTMP ingest
       - "18554:8554" # RTSP
@@ -13,14 +13,20 @@ services:
       - ./mediamtx_conf/mediamtx.yml:/mediamtx.yml:ro
       - ./recordings:/recordings
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   backend:
     build:
       context: ..
       dockerfile: prototype/backend/Dockerfile
     ports:
-      - "4000:8080"
+      - "${BACKEND_PORT:-4000}:8080"
     environment:
+      ADDR: ":8080"
       MEDIAMTX_HLS_URL: http://mediamtx:8888
       MEDIAMTX_WEBRTC_URL: http://mediamtx:8889
       MEDIAMTX_API_URL: http://mediamtx:9997/v3
@@ -28,3 +34,14 @@ services:
     depends_on:
       - mediamtx
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
