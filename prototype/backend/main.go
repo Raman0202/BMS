@@ -65,7 +65,7 @@ func main() {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	log.Printf("MediaMTX console backend listening on %s", cfg.addr)
+	log.Printf("fleet-bms-api listening on %s", cfg.addr)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
