@@ -38,8 +38,8 @@ func main() {
 		_, _ = w.Write([]byte("ok"))
 	})
 
-	mux.Handle("/live/", reverseProxy(cfg.mediaMTXHLS, "", noCache))
-	mux.Handle("/whep/", reverseProxy(cfg.mediaMTXWHEP, "", nil))
+	mux.Handle("/live/", reverseProxy(cfg.mediaMTXHLS, "/live", noCache))
+	mux.Handle("/whep/", reverseProxy(cfg.mediaMTXWHEP, "/whep", nil))
 	mux.Handle("/mtx-api/", reverseProxy(cfg.mediaMTXAPI, "/mtx-api", nil))
 
 	api := newAPIServer(cfg.mediaMTXAPI)
