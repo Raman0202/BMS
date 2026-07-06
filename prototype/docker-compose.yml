@@ -25,7 +25,6 @@ services:
       MEDIAMTX_WEBRTC_URL: http://mediamtx:8889
       MEDIAMTX_API_URL: http://mediamtx:9997/v3
       MEDIAMTX_PLAYBACK_URL: http://mediamtx:9996
-      STATIC_DIR: /app/frontend
     depends_on:
       - mediamtx
     restart: unless-stopped

@@ -7,26 +7,23 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
-	"path"
 	"strings"
 	"time"
 )
 
 type config struct {
-	addr              string
-	staticDir         string
-	mediaMTXHLS       string
-	mediaMTXWHEP      string
-	mediaMTXAPI       string
-	mediaMTXPlayback  string
+	addr             string
+	mediaMTXHLS      string
+	mediaMTXWHEP     string
+	mediaMTXAPI      string
+	mediaMTXPlayback string
 }
 
 func main() {
 	cfg := config{
-		addr:         env("ADDR", ":8080"),
-		staticDir:    env("STATIC_DIR", "./frontend"),
-		mediaMTXHLS:  env("MEDIAMTX_HLS_URL", "http://localhost:8888"),
-		mediaMTXWHEP: env("MEDIAMTX_WEBRTC_URL", "http://localhost:8889"),
+		addr:             env("ADDR", ":8080"),
+		mediaMTXHLS:      env("MEDIAMTX_HLS_URL", "http://localhost:8888"),
+		mediaMTXWHEP:     env("MEDIAMTX_WEBRTC_URL", "http://localhost:8889"),
 		mediaMTXAPI:      env("MEDIAMTX_API_URL", "http://localhost:9997/v3"),
 		mediaMTXPlayback: env("MEDIAMTX_PLAYBACK_URL", "http://localhost:9996"),
 	}
@@ -49,7 +46,18 @@ func main() {
 	mux.HandleFunc("GET /api/stream/{id}/recording", api.handleStreamRecording)
 	mux.Handle("/playback/", reverseProxy(cfg.mediaMTXPlayback, "/playback", noCache))
 
-	mux.Handle("/", staticSPA(cfg.staticDir))
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, map[string]any{
+			"service": "fleet-bms-api",
+			"endpoints": []string{
+				"GET /api/fleet",
+				"GET /api/bus/{id}",
+				"GET /api/stream/{id}",
+				"GET /api/stream/{id}/recording?from=&to=",
+				"GET /health",
+			},
+		})
+	})
 
 	server := &http.Server{
 		Addr:              cfg.addr,
@@ -109,26 +117,6 @@ func reverseProxy(target string, stripPrefix string, decorate func(http.Header))
 
 func noCache(header http.Header) {
 	header.Set("Cache-Control", "no-cache, no-store, must-revalidate")
-}
-
-func staticSPA(root string) http.Handler {
-	files := http.Dir(root)
-	fileServer := http.FileServer(files)
-
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" {
-			name := path.Clean(strings.TrimPrefix(r.URL.Path, "/"))
-			if file, err := files.Open(name); err == nil {
-				_ = file.Close()
-				fileServer.ServeHTTP(w, r)
-				return
-			}
-		}
-
-		w.Header().Set("Cache-Control", "no-cache")
-		r.URL.Path = "/"
-		fileServer.ServeHTTP(w, r)
-	})
 }
 
 func singleJoiningSlash(base, next string) string {
