@@ -15,9 +15,10 @@ readTimeout: 10s
 writeTimeout: 10s
 webrtcICEServers2: []
 
-# WebRTC ICE: advertise reachable host(s) + fixed muxed UDP port so the
-# laptop browser can receive media from the Dockerised server.
-# Add your Windows LAN IP here too if viewing the dashboard from another device.
+# WebRTC ICE: advertise reachable host(s) + fixed muxed UDP port so
+# browsers can receive media from the Dockerised server.
+# Override via MTX_WEBRTCADDITIONALHOSTS env var (e.g. ECS task public IP/DNS).
+# Defaults to 127.0.0.1 for local dev.
 webrtcAdditionalHosts: [127.0.0.1]
 webrtcLocalUDPAddress: :18189
 
@@ -35,8 +36,11 @@ authInternalUsers:
     ips: []
     permissions:
       - action: publish
+        path:
       - action: read
+        path:
       - action: playback
+        path:
       - action: api        # allow /v3/paths/list (dashboard /cams discovery)
       - action: metrics
 
@@ -49,5 +53,5 @@ pathDefaults:
   recordDeleteAfter: 1h
 
 paths:
-  all:
+  all_others:
     source: publisher

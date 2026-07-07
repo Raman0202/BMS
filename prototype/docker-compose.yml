@@ -12,12 +12,21 @@ services:
     volumes:
       - ./mediamtx_conf/mediamtx.yml:/mediamtx.yml:ro
       - ./recordings:/recordings
+    environment:
+      MTX_WEBRTCADDITIONALHOSTS: "${MTX_WEBRTCADDITIONALHOSTS:-127.0.0.1}"
     restart: unless-stopped
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
+
+  test-stream:
+    build:
+      context: ./test-stream
+    depends_on:
+      - mediamtx
+    restart: unless-stopped
 
   backend:
     build:
