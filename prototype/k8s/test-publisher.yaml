@@ -43,7 +43,9 @@ spec:
           resources:
             requests:
               cpu: 100m
-              memory: 64Mi
+              memory: 192Mi
             limits:
               cpu: "1"
-              memory: 256Mi
+              # libx264 re-encode of the 1440p sample needs headroom; 256Mi
+              # OOMKilled it (exit 137) within a second.
+              memory: 768Mi
