@@ -105,6 +105,15 @@ func reverseProxy(target string, stripPrefix string, decorate func(http.Header))
 		if decorate != nil {
 			decorate(resp.Header)
 		}
+		// MediaMTX emits root-relative redirects (e.g. the HLS cookieCheck
+		// hop -> /<path>/index.m3u8), unaware it is mounted under stripPrefix.
+		// Re-add the prefix so the client's next hop comes back through here.
+		if stripPrefix != "" {
+			if loc := resp.Header.Get("Location"); strings.HasPrefix(loc, "/") &&
+				loc != stripPrefix && !strings.HasPrefix(loc, stripPrefix+"/") {
+				resp.Header.Set("Location", stripPrefix+loc)
+			}
+		}
 		return nil
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
