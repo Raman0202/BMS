@@ -1,0 +1,213 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: bms-dev
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mediamtx-config
+  namespace: bms-dev
+data:
+  mediamtx.yml: |
+    logLevel: info
+    logDestinations: [stdout]
+
+    rtspAddress: :8554
+    rtmpAddress: :1935
+    hlsAddress: :8888
+    webrtcAddress: :8889
+    apiAddress: :9997
+    api: yes
+    playback: yes
+    playbackAddress: :9996
+
+    protocols: [tcp, udp]
+    readTimeout: 10s
+    writeTimeout: 10s
+    webrtcICEServers2: []
+
+    # Overridden at runtime via MTX_WEBRTCADDITIONALHOSTS / MTX_WEBRTCLOCALUDPADDRESS
+    # env vars on the Deployment below — keep in sync with the bms-ingest
+    # Service's UDP nodePort.
+    webrtcAdditionalHosts: [127.0.0.1]
+    webrtcLocalUDPAddress: :18189
+
+    hlsAlwaysRemux: yes
+    hlsVariant: mpegts
+    hlsSegmentCount: 7
+    hlsSegmentDuration: 1s
+    hlsPartDuration: 200ms
+
+    # Allow anonymous publish and read for dev. Lock this down before this
+    # is reachable from the public internet — see REMOTE_BUSES_SETUP.md.
+    authMethod: internal
+    authInternalUsers:
+      - user: any
+        pass:
+        ips: []
+        permissions:
+          - action: publish
+            path:
+          - action: read
+            path:
+          - action: playback
+            path:
+          - action: api
+          - action: metrics
+
+    pathDefaults:
+      record: yes
+      recordPath: /recordings/%path/%Y-%m-%d_%H-%M-%S-%f
+      recordFormat: fmp4
+      recordPartDuration: 1s
+      recordSegmentDuration: 60s
+      recordDeleteAfter: 1h
+
+    paths:
+      livefeed:
+        source: publisher
+      '~^.*_[0-9]+$':
+        source: rtmp://localhost:1935/livefeed
+        sourceOnDemand: yes
+      all_others:
+        source: publisher
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: recordings-pvc
+  namespace: bms-dev
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  # storageClassName: <set to your cluster's default/RWO storage class if needed>
+
+---
+# Single container: MediaMTX + Go API run together (supervisord). Backend reaches
+# MediaMTX over localhost, so there is no internal Service.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bms-video
+  namespace: bms-dev
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate   # single RWO recordings volume — never run 2 pods at once
+  selector:
+    matchLabels:
+      app: bms-video
+  template:
+    metadata:
+      labels:
+        app: bms-video
+    spec:
+      # Image is pulled from ECR. Requires registry auth on the cluster:
+      # either a Portainer ECR registry (auto-refreshes the token) or the
+      # ecr-pull secret below (manual ~12h refresh). See DEPLOY.md.
+      imagePullSecrets:
+        - name: ecr-pull
+      containers:
+        - name: bms-video
+          image: 475560691356.dkr.ecr.ap-south-1.amazonaws.com/bms/video/dev:latest
+          imagePullPolicy: Always
+          env:
+            # Domain buses/clients use to reach this pod — must match the DNS
+            # record pointed at the node(s) fronting the bms-ingest Service.
+            - name: MTX_WEBRTCADDITIONALHOSTS
+              value: "bms-media.gna.energy"
+            # Must equal the UDP port+nodePort on bms-ingest below, otherwise
+            # WebRTC ICE candidates advertise an unreachable port.
+            - name: MTX_WEBRTCLOCALUDPADDRESS
+              value: ":30189"
+          ports:
+            - containerPort: 8080
+              protocol: TCP   # Go JSON API (the one API)
+            - containerPort: 1935
+              protocol: TCP   # RTMP ingest
+            - containerPort: 30189
+              protocol: UDP   # WebRTC media
+          volumeMounts:
+            - name: config
+              mountPath: /mediamtx.yml
+              subPath: mediamtx.yml
+            - name: recordings
+              mountPath: /recordings
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 8
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 250m
+              memory: 320Mi
+            limits:
+              cpu: 1
+              memory: 1Gi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+      securityContext:
+        # fsGroup makes the mounted recordings PVC writable by the app user
+        fsGroup: 10001
+      volumes:
+        - name: config
+          configMap:
+            name: mediamtx-config
+        - name: recordings
+          persistentVolumeClaim:
+            claimName: recordings-pvc
+
+---
+# The one API — HLS/WebRTC/playback/mtx-api all proxied through here on :8080.
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: bms-dev
+spec:
+  type: NodePort
+  selector:
+    app: bms-video
+  ports:
+    - port: 80
+      targetPort: 8080
+      nodePort: 30080
+
+---
+# Public ingest surface — buses publish RTMP here directly, WebRTC media (UDP)
+# flows here directly. Raw TCP/UDP, cannot go through an HTTP Ingress.
+apiVersion: v1
+kind: Service
+metadata:
+  name: bms-ingest
+  namespace: bms-dev
+spec:
+  type: NodePort
+  selector:
+    app: bms-video
+  ports:
+    - name: rtmp
+      port: 1935
+      targetPort: 1935
+      nodePort: 31935
+      protocol: TCP
+    - name: webrtc-media
+      port: 30189
+      targetPort: 30189
+      nodePort: 30189   # must equal MTX_WEBRTCLOCALUDPADDRESS port — do not remap
+      protocol: UDP

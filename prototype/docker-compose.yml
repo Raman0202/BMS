@@ -1,20 +1,24 @@
 services:
-  mediamtx:
-    image: bluenviron/mediamtx:1.19.2
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
     ports:
-      - "11935:1935" # RTMP ingest
-      - "18554:8554" # RTSP
-      - "18888:8888" # HLS
-      - "18889:8889" # WebRTC WHIP/WHEP
-      - "19997:9997" # API
-      - "18189:18189/udp"
-      - "19996:9996" # Playback (recordings)
+      - "${BACKEND_PORT:-4000}:8080"   # JSON API (the one API)
+      - "11935:1935"                   # RTMP ingest
+      - "18189:18189/udp"              # WebRTC media
+    environment:
+      MTX_WEBRTCADDITIONALHOSTS: "${MTX_WEBRTCADDITIONALHOSTS:-127.0.0.1}"
     volumes:
       - ./mediamtx_conf/mediamtx.yml:/mediamtx.yml:ro
       - ./recordings:/recordings
-    environment:
-      MTX_WEBRTCADDITIONALHOSTS: "${MTX_WEBRTCADDITIONALHOSTS:-127.0.0.1}"
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
     logging:
       driver: json-file
       options:
@@ -25,30 +29,8 @@ services:
     build:
       context: ./test-stream
     depends_on:
-      - mediamtx
+      - app
     restart: unless-stopped
-
-  backend:
-    build:
-      context: ..
-      dockerfile: prototype/backend/Dockerfile
-    ports:
-      - "${BACKEND_PORT:-4000}:8080"
-    environment:
-      ADDR: ":8080"
-      MEDIAMTX_HLS_URL: http://mediamtx:8888
-      MEDIAMTX_WEBRTC_URL: http://mediamtx:8889
-      MEDIAMTX_API_URL: http://mediamtx:9997/v3
-      MEDIAMTX_PLAYBACK_URL: http://mediamtx:9996
-    depends_on:
-      - mediamtx
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8080/health"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-      start_period: 5s
     logging:
       driver: json-file
       options:

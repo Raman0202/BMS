@@ -11,7 +11,7 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
-      - backend
+      - app
     restart: unless-stopped
 
 volumes:
